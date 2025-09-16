@@ -95,17 +95,29 @@ void loop() {
 
     // calculate power and accumulate energy
     float power_W = Vrms * Irms; // approximate real power (no phase correction)
-    accumulateEnergy(power_W);
+    // ----------------- Theft Detection -----------------
+    if (Vrms > 200.0 && Irms < 0.05) { 
+      // mains present, but very little current -> bypass theft
+      lcd.clear();
+      lcd.setCursor(0,0);
+      lcd.print("! POWER THEFT !");
+      lcd.setCursor(0,1);
+      lcd.print("Bypass Suspected");
+      Serial.println("Power theft detected (bypass).");
+      digitalWrite(RELAY_PIN, HIGH); // trip relay
+    } else {
+      accumulateEnergy(power_W);
 
-    // display and serial
-    if (millis() - lastDisplayMillis >= DISPLAY_INTERVAL_MS) {
-      showOnLCD(Vrms, Irms, power_W, energy_Wh);
-      lastDisplayMillis = millis();
+      if (millis() - lastDisplayMillis >= DISPLAY_INTERVAL_MS) {
+        showOnLCD(Vrms, Irms, power_W, energy_Wh);
+        lastDisplayMillis = millis();
+      }
+
+      Serial.print("Vrms: "); Serial.print(Vrms, 2);
+      Serial.print(" V, Irms: "); Serial.print(Irms, 3);
+      Serial.print(" A, P: "); Serial.print(power_W, 2);
+      Serial.print(" W, Energy(Wh): "); Serial.println(energy_Wh, 4);
     }
-    Serial.print("Vrms: "); Serial.print(Vrms, 2);
-    Serial.print(" V, Irms: "); Serial.print(Irms, 3);
-    Serial.print(" A, P: "); Serial.print(power_W, 2);
-    Serial.print(" W, Energy(Wh): "); Serial.println(energy_Wh, 4);
   }
 
   // short delay to avoid tight looping (measurements include internal delays)
