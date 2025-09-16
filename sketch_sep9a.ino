@@ -32,7 +32,7 @@ const int ADC_MAX_COUNTS = 4095;    // 12-bit ADC for ESP32 core
 // Sensor calibration - YOU MUST CALIBRATE THESE
 // Current sensor: output sits at Vref/2 at 0A and varies +/- sensitivity*I
 // Example: ACS712 5A -> ~0.185 V/A
-float CURRENT_SENSITIVITY_V_PER_A = 0.185f; // V per amp (placeholder) - set for your sensor
+float CURRENT_SENSITIVITY_V_PER_A = 0.100f; // V per amp (placeholder) - set for your sensor
 // Voltage sensor: ratio to convert ADC measured volts -> mains peak voltage.
 // Example: if your sensor outputs 1V when mains peak is 325V, ratio = 325.0
 float VOLTAGE_DIVIDER_RATIO = 230.0f / 1.0f; // placeholder: actual Vrms = measuredVoltage * (VOLTAGE_DIVIDER_RATIO / sqrt(2))
