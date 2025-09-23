@@ -10,6 +10,13 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
+#define BLYNK_TEMPLATE_ID "YourTemplateID"
+#define BLYNK_DEVICE_NAME "YourDeviceName"
+
+#include "BlynkEdgent.h"
+
+
+
 // -------------------- PIN CONFIG --------------------
 const int CURRENT_SENSOR_PIN = 34;   // ADC1_CH6 (GPIO34) - input only
 const int VOLTAGE_SENSOR_PIN = 35;   // ADC1_CH7 (GPIO35)
@@ -52,6 +59,16 @@ const unsigned long TAMPER_RETRY_MS = 10000; // time to wait after tamper before
 unsigned long lastDisplayMillis = 0;
 const unsigned long DISPLAY_INTERVAL_MS = 1000; // update display every second
 
+// ------------------ Virtual Pins ------------------//
+#define VPIN_CURRENT V0
+#define VPIN_POWER   V1
+#define VPIN_ALERT   V2
+
+// ------------------ Relay pin (optional) ------------------//
+int relayPin = 25;  // Connect relay to GPIO25
+
+
+
 // -------------------- SETUP --------------------
 void setup() {
   Serial.begin(115200);
@@ -78,6 +95,15 @@ void setup() {
 
   lastEnergyMillis = millis();
   Serial.println("Setup done. Starting measurements...");
+  
+  Serial.begin(115200);
+
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, HIGH); // Relay ON initially
+
+  BlynkEdgent.begin();   // Instead of Blynk.begin()
+  //
+
 }
 
 // -------------------- MAIN LOOP --------------------
@@ -120,8 +146,26 @@ void loop() {
     }
   }
 
-  // short delay to avoid tight looping (measurements include internal delays)
-  delay(50);
+   BlynkEdgent.run();
+
+  double current = random(1, 20);   
+  double power   = current * 230;   
+
+  Serial.print("Current: "); Serial.print(current); Serial.println(" A");
+  Serial.print("Power: "); Serial.print(power); Serial.println(" W");
+
+  Blynk.virtualWrite(VPIN_CURRENT, current);
+  Blynk.virtualWrite(VPIN_POWER, power);
+
+  if (power > 2000) {  
+    Blynk.logEvent("power_alert", "⚡ Power Theft / Overload Detected!");
+    digitalWrite(relayPin, LOW); 
+  } else {
+    digitalWrite(relayPin, HIGH);
+  }
+
+  delay(2000);
+
 }
 
 // -------------------- FUNCTIONS --------------------
@@ -219,4 +263,6 @@ void showOnLCD(float Vrms, float Irms, float P, double Ewh) {
   lcd.print("P:"); lcd.print(P,1); lcd.print("W ");
   lcd.print("E:"); lcd.print(Ewh,2); lcd.print("Wh");
 }
+
+
 
