@@ -1,5 +1,20 @@
 #define BLYNK_PRINT Serial
+// #define - It tells the compiler: “Whenever you see this word, replace it with something else before compiling.”
+// example - #define PI 3.14159 - Every time the code sees PI, it replaces it with 3.14159.
+//#define BLYNK_PRINT Serial tells the Blynk library: “Send all debug messages to the Serial Monitor.”
+//the library does not know whether you want to print to:
+//Serial (USB monitor), or
+//Serial1, Serial2 (other UART ports), or
+//Nothing at all (if you don’t want logs).
+//
 #include <BlynkSimpleEsp32_Edgent.h>
+//It tells the compiler: “Bring in extra code from a library so I can use it here.”
+//automatically get access to:
+//BlynkEdgent.begin(); → starts WiFi setup + Blynk connection.
+//BlynkEdgent.run(); → keeps device connected, handles reconnection, OTA updates.
+//Blynk.virtualWrite(V1, value); → send sensor data to Blynk app.
+//BLYNK_WRITE(Vx) → receive commands from the app (for example, to control a relay).
+//
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
@@ -67,6 +82,7 @@ void loop() {
     Blynk.virtualWrite(V5, 255); // Tamper ON
     Blynk.logEvent("tamper_alert", "Tamper Detected! Relay Tripped");
   } else {
+    Blynk.virtualWrite(V5, 0); //Tamper OFF
     float Irms = readRMS_Current(CURRENT_SENSOR_PIN);
     float Vrms = readRMS_Voltage(VOLTAGE_SENSOR_PIN);
     float power_W = Vrms * Irms;
