@@ -1,21 +1,29 @@
-/* Smart Energy Meter (ESP32 + Blynk.Edgent + LCD)
+/* Smart Energy Meter (ESP32 + Blynk + LCD + Gov Logging)
    - RMS Voltage & Current Measurement
    - Real-time Power (W) & Energy (Wh) accumulation
    - Tamper detection (Hall Sensor) -> relay trip & alarm
    - Power Theft detection (bypass condition)
    - Local Display (I2C LCD)
-   - Cloud Monitoring (Blynk App, auto WiFi provisioning)
+   - Cloud Monitoring:
+       User dashboard via Blynk (mobile)
+       Government logging via HTTP API (desktop auth token)
+   - Mobile notifications for tamper/theft alerts
 */
+
+#define BLYNK_TEMPLATE_ID "TMPL36n7PL96f"
+#define BLYNK_TEMPLATE_NAME "Hardware test"
+#define BLYNK_AUTH_TOKEN "YourUserAuthTokenHere"   // 🔹 Replace this with your own Blynk Auth Token
 
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <WiFi.h>
-#include <BlynkEdgent.h>
+#include <HTTPClient.h>
+#include <BlynkSimpleEsp32.h>  // ✅ Use this instead of BlynkEdgent.h
 
-// -------------------- BLYNK CONFIG --------------------
-#define BLYNK_TEMPLATE_ID "TMPL36n7PL96f"
-#define BLYNK_TEMPLATE_NAME "Smart Energy Meter"
-#define BLYNK_FIRMWARE_VERSION "0.2.0"
+// -------------------- BLYNK USER DASHBOARD --------------------
+char auth[] = BLYNK_AUTH_TOKEN;
+char ssid[] = "YourWiFiName";       // 🔹 Replace with your Wi-Fi SSID
+char pass[] = "YourWiFiPassword";   // 🔹 Replace with your Wi-Fi Password
 
 BlynkTimer timer;
 
@@ -46,8 +54,13 @@ unsigned long lastEnergyMillis = 0;
 // -------------------- FLAGS --------------------
 bool tamperDetected = false;
 
+// -------------------- GOVERNMENT LOGGING --------------------
+const char* GOV_AUTH = "ukiSbVaUr-3h2-Sorur2JGiXxQ6LBMct"; // replace with Desktop Auth Token
+const unsigned long GOV_INTERVAL_MS = 60000;          // send data every 1 minute
+unsigned long lastGovMillis = 0;
+
 // -------------------- BLYNK RELAY CONTROL --------------------
-BLYNK_WRITE(V4) {   // Button on Blynk to control Relay
+BLYNK_WRITE(V4) {   // Button on user dashboard to control Relay
   int relayState = param.asInt();
   digitalWrite(RELAY_PIN, relayState);
 }
@@ -63,7 +76,7 @@ void handleTamper() {
   lcd.setCursor(0,0); lcd.print("! TAMPER ALERT !");
   lcd.setCursor(0,1); lcd.print("Load DISCONNECTED");
   Serial.println("⚠ TAMPER detected - relay tripped.");
-  Blynk.virtualWrite(V5, "⚠ TAMPER ALERT!");
+  Blynk.logEvent("tamper_alert", "⚠ TAMPER ALERT! Load disconnected!");
 }
 
 float readMeasurements(float &Vrms, float &Irms) {
@@ -99,9 +112,7 @@ float readMeasurements(float &Vrms, float &Irms) {
 
 void accumulateEnergy(float powerW) {
   unsigned long now = millis();
-  unsigned long dt_ms = now - lastEnergyMillis;
-  if (dt_ms == 0) return;
-  double dt_h = (double)dt_ms / 3600000.0;
+  double dt_h = (now - lastEnergyMillis) / 3600000.0;
   energy_Wh += powerW * dt_h;
   lastEnergyMillis = now;
 }
@@ -112,6 +123,29 @@ void showOnLCD(float Vrms, float Irms, float P, double Ewh) {
   lcd.print("V:"); lcd.print(Vrms,1); lcd.print(" I:"); lcd.print(Irms,2);
   lcd.setCursor(0,1);
   lcd.print("P:"); lcd.print(P,1); lcd.print("W E:"); lcd.print(Ewh,1);
+}
+
+// -------------------- GOVERNMENT LOGGING --------------------
+void sendToGovernment(float Vrms, float Irms, float powerW, double energyWh) {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    String url = "https://blynk.cloud/external/api/update?token=";
+    url += GOV_AUTH;
+    url += "&V1="; url += Vrms;
+    url += "&V2="; url += Irms;
+    url += "&V3="; url += powerW;
+    url += "&V4="; url += energyWh;
+    url += "&V5="; url += String(millis()/1000); // timestamp in seconds
+
+    http.begin(url);
+    int httpCode = http.GET();
+    if (httpCode > 0) {
+      Serial.println("Sent to Government Blynk, code: " + String(httpCode));
+    } else {
+      Serial.println("Error sending to Government Blynk");
+    }
+    http.end();
+  }
 }
 
 // -------------------- MEASUREMENT TASK --------------------
@@ -132,21 +166,26 @@ void measureAndUpdate() {
     lcd.setCursor(0,0); lcd.print("! POWER THEFT !");
     lcd.setCursor(0,1); lcd.print("Bypass Suspected");
     Serial.println("⚠ Power theft detected (bypass).");
-    Blynk.virtualWrite(V5, "⚠ THEFT DETECTED!");
-    digitalWrite(RELAY_PIN, LOW); // trip relay
+
+    Blynk.logEvent("power_theft", "⚠ POWER THEFT detected! Bypass suspected!");
+    digitalWrite(RELAY_PIN, LOW);
     return;
   }
 
   accumulateEnergy(power_W);
-
-  // Display
   showOnLCD(Vrms, Irms, power_W, energy_Wh);
 
-  // Send to Blynk
+  // Send to User Blynk (mobile)
   Blynk.virtualWrite(V0, Vrms);
   Blynk.virtualWrite(V1, Irms);
   Blynk.virtualWrite(V2, power_W);
   Blynk.virtualWrite(V3, energy_Wh);
+
+  // Send to Government Blynk (desktop) every GOV_INTERVAL_MS
+  if (millis() - lastGovMillis > GOV_INTERVAL_MS) {
+    sendToGovernment(Vrms, Irms, power_W, energy_Wh);
+    lastGovMillis = millis();
+  }
 
   // Debug
   Serial.printf("Vrms=%.2f V, Irms=%.3f A, P=%.2f W, E=%.3f Wh\n",
@@ -161,8 +200,8 @@ void setup() {
   Wire.begin();
   lcd.init();
   lcd.backlight();
-  lcd.setCursor(0,0); lcd.print("Smart Energy");
-  lcd.setCursor(0,1); lcd.print("Metering ESP32");
+  lcd.setCursor(0,0); lcd.print("Smart Energy Meter");
+  lcd.setCursor(0,1); lcd.print("Connecting WiFi...");
   delay(1500);
   lcd.clear();
 
@@ -170,15 +209,13 @@ void setup() {
   pinMode(RELAY_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, LOW);
 
-  BlynkEdgent.begin();   // WiFi provisioning
+  Blynk.begin(auth, ssid, pass);   // ✅ Normal Wi-Fi + Blynk connection
   lastEnergyMillis = millis();
-
-  // Schedule measurement every 1s
-  timer.setInterval(1000L, measureAndUpdate);
+  timer.setInterval(1000L, measureAndUpdate); // measure every second
 }
 
 // -------------------- LOOP --------------------
 void loop() {
-  BlynkEdgent.run();
+  Blynk.run();
   timer.run();
 }
