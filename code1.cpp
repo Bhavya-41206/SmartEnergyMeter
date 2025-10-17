@@ -11,7 +11,7 @@ const float currCalibration = 1.80;
 
 // Proportional scaling factors (adjust after measuring a known load)
 float voltageFactor = 4.34;  // Example: adjust so measured Vrms matches 230V
-float currentFactor = 2.0;   // Example: adjust so measured Irms matches actual load
+float currentFactor = 1.3;   // Example: adjust so measured Irms matches actual load
 
 // EnergyMonitor instance
 EnergyMonitor emon;
