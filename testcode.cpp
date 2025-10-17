@@ -30,7 +30,7 @@ bool theftDetected = false;
 bool tamperDetected = false;
 
 // ======== Blynk (Optional for testing) ========
-char auth[] = "YOUR_BLYNK_AUTH_TOKEN"; // Replace if using Blynk
+char auth[] = "ukiSbVaUr-3h2-Sorur2JGiXxQ6LBMct"; // Replace if using Blynk
 #define VPIN_VOLTAGE V1
 #define VPIN_CURRENT V2
 #define VPIN_THEFT V3
