@@ -11,7 +11,7 @@
 #include <LiquidCrystal_I2C.h>
 
 // ======== LCD Setup ========
-LiquidCrystal_I2C lcd(0x27, 16, 2); // Adjust I2C address if needed
+LiquidCrystal_I2C lcd(0x27, 20, 4); // Adjust I2C address if needed
 
 // ======== Pin Definitions ========
 #define VOLTAGE_PIN 34   // Analog pin for voltage sensor
