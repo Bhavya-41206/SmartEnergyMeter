@@ -3,7 +3,7 @@
 #include <Wire.h>          // For I2C
 #include <LiquidCrystal_I2C.h>  // For LCD
 
-LiquidCrystal_I2C lcd(0x27, 16, 2);  // LCD 16x2
+LiquidCrystal_I2C lcd(0x27, 20, 4);  // LCD 16x2
 
 // Calibration constants
 const float vCalibration = 42.5;  // Voltage calibration factor
