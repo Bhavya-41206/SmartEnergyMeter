@@ -25,7 +25,7 @@ LiquidCrystal_I2C lcd(0x27, 20, 4); // 20x4 LCD
 #define ADC_RESOLUTION 4095.0    // 12-bit ADC
 #define ADC_VOLTAGE 3.3          // ESP32 ADC reference voltage
 #define VOLTAGE_SENSOR_MAX 230.0 // Max AC voltage measured
-#define ACS_SENSITIVITY 0.185    // V/A for ACS712 5A version
+#define ACS_SENSITIVITY 0.100    // V/A for ACS712 5A version
 #define ACS_ZERO_VOLT 1.65       // Voltage at 0A (half of Vcc)
 
 // ======== Variables ========
