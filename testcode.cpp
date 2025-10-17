@@ -1,16 +1,14 @@
 /*
-  Smart Energy Meter (ESP32)
+  Smart Energy Meter Test Code (Standalone)
   - RMS Voltage & Current Measurement
   - Real-time Power (W) & Energy (Wh) accumulation
   - Tamper detection (Hall Sensor) -> relay trip & alarm
-  - Power Theft detection (bypass condition)
   - Local Display (I2C LCD)
-  - No website integration, can test independently
+  - No Blynk or website integration
 */
 
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-#include <BlynkSimpleEsp32.h>  // Optional: for cloud test if needed
 
 // ======== LCD Setup ========
 LiquidCrystal_I2C lcd(0x27, 16, 2); // Adjust I2C address if needed
@@ -29,11 +27,8 @@ float energy = 0.0;
 bool theftDetected = false;
 bool tamperDetected = false;
 
-// ======== Blynk (Optional for testing) ========
-char auth[] = "ukiSbVaUr-3h2-Sorur2JGiXxQ6LBMct"; // Replace if using Blynk
-#define VPIN_VOLTAGE V1
-#define VPIN_CURRENT V2
-#define VPIN_THEFT V3
+unsigned long previousMillis = 0;
+const unsigned long interval = 1000; // 1 second
 
 void setup() {
   Serial.begin(115200);
@@ -46,50 +41,45 @@ void setup() {
   lcd.backlight();
   lcd.setCursor(0, 0);
   lcd.print("Smart Energy Meter");
-
-  // Optional Blynk connection (comment if not testing Blynk)
-  // Blynk.begin(auth, "SSID", "PASSWORD");
 }
 
 void loop() {
-  // ===== Read Sensors =====
-  voltageRMS = analogRead(VOLTAGE_PIN) * (230.0 / 4095.0); // example calibration
-  currentRMS = analogRead(CURRENT_PIN) * (5.0 / 4095.0);   // example calibration
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
 
-  // ===== Calculate Power & Energy =====
-  power = voltageRMS * currentRMS;
-  energy += power / 3600.0; // Wh per second
+    // ===== Read Sensors =====
+    // Replace these analogRead lines with your real sensor calibration
+    voltageRMS = analogRead(VOLTAGE_PIN) * (230.0 / 4095.0); // Example: 0-230V
+    currentRMS = analogRead(CURRENT_PIN) * (5.0 / 4095.0);   // Example: 0-5A
 
-  // ===== Tamper/Theft Detection =====
-  tamperDetected = digitalRead(HALL_PIN) == LOW; // Hall sensor triggered
-  theftDetected = tamperDetected; // you can add bypass logic here
+    // ===== Calculate Power & Energy =====
+    power = voltageRMS * currentRMS;
+    energy += power / 3600.0; // Wh per second
 
-  if (theftDetected) {
-    digitalWrite(RELAY_PIN, HIGH); // Cut power
-  } else {
-    digitalWrite(RELAY_PIN, LOW);
+    // ===== Tamper/Theft Detection =====
+    tamperDetected = digitalRead(HALL_PIN) == LOW; // Hall sensor triggered
+    theftDetected = tamperDetected; // Add your bypass logic if needed
+
+    if (theftDetected) {
+      digitalWrite(RELAY_PIN, HIGH); // Cut power
+    } else {
+      digitalWrite(RELAY_PIN, LOW);
+    }
+
+    // ===== Print to Serial =====
+    Serial.print("Voltage: "); Serial.print(voltageRMS); Serial.print(" V, ");
+    Serial.print("Current: "); Serial.print(currentRMS); Serial.print(" A, ");
+    Serial.print("Power: "); Serial.print(power); Serial.print(" W, ");
+    Serial.print("Energy: "); Serial.print(energy, 3); Serial.print(" Wh, ");
+    Serial.print("Theft: "); Serial.println(theftDetected ? "YES" : "NO");
+
+    // ===== Display on LCD =====
+    lcd.setCursor(0, 0);
+    lcd.print("V:"); lcd.print(voltageRMS, 1); lcd.print("V ");
+    lcd.print("I:"); lcd.print(currentRMS, 2); lcd.print("A");
+    lcd.setCursor(0, 1);
+    lcd.print("P:"); lcd.print(power, 1); lcd.print("W ");
+    lcd.print(theftDetected ? "THEFT!" : "OK   ");
   }
-
-  // ===== Print to Serial =====
-  Serial.print("Voltage: "); Serial.print(voltageRMS); Serial.print(" V, ");
-  Serial.print("Current: "); Serial.print(currentRMS); Serial.print(" A, ");
-  Serial.print("Power: "); Serial.print(power); Serial.print(" W, ");
-  Serial.print("Energy: "); Serial.print(energy, 3); Serial.print(" Wh, ");
-  Serial.print("Theft: "); Serial.println(theftDetected ? "YES" : "NO");
-
-  // ===== Display on LCD =====
-  lcd.setCursor(0, 0);
-  lcd.print("V:"); lcd.print(voltageRMS, 1); lcd.print("V ");
-  lcd.print("I:"); lcd.print(currentRMS, 2); lcd.print("A");
-  lcd.setCursor(0, 1);
-  lcd.print("P:"); lcd.print(power, 1); lcd.print("W ");
-  lcd.print(theftDetected ? "THEFT!" : "OK   ");
-
-  // ===== Optional Blynk Update =====
-  // Blynk.virtualWrite(VPIN_VOLTAGE, voltageRMS);
-  // Blynk.virtualWrite(VPIN_CURRENT, currentRMS);
-  // Blynk.virtualWrite(VPIN_THEFT, theftDetected ? 1 : 0);
-  
-  delay(1000);
-  // Blynk.run(); // Uncomment if using Blynk
 }
