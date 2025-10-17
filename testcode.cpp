@@ -1,32 +1,21 @@
-/*
-  Smart Energy Meter (ESP32)
-  - 20x4 LCD
-  - Voltage & Current (ACS712 20A) measurement
-  - Power & Energy calculation
-  - Theft/Tamper detection via Hall sensor
-  - Relay control
-  - ADC attenuation and calibration placeholders
-  - Optional 9W bulb simulation
-*/
-
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
 // ======== LCD Setup ========
-LiquidCrystal_I2C lcd(0x27, 20, 4); // 20x4 LCD
+LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 // ======== Pin Definitions ========
-#define VOLTAGE_PIN 34    // Voltage sensor analog pin
-#define CURRENT_PIN 35    // ACS712 20A analog pin
-#define HALL_PIN 32       // Hall sensor pin
-#define RELAY_PIN 33      // Relay output
+#define VOLTAGE_PIN 34
+#define CURRENT_PIN 35
+#define HALL_PIN 32
+#define RELAY_PIN 33
 
 // ======== ADC & Sensor Constants ========
-#define ADC_RESOLUTION 4095.0   // 12-bit ADC
-#define ADC_VOLTAGE 3.3         // ESP32 ADC reference voltage
-#define VOLTAGE_SENSOR_MAX 230.0 // Maximum AC voltage your sensor measures
-#define ACS_SENSITIVITY 0.100   // V/A for 20A ACS712
-float ACS_ZERO_VOLT = 1.65;     // Measured at no current; will calibrate
+#define ADC_RESOLUTION 4095.0
+#define ADC_VOLTAGE 3.3
+float VOLTAGE_MULTIPLIER = 1.0; // To be calibrated
+float ACS_ZERO_VOLT = 1.65;     // To be calibrated
+#define ACS_SENSITIVITY 0.100
 
 // ======== Variables ========
 float voltageRMS = 0.0;
@@ -36,19 +25,18 @@ float energy = 0.0;
 bool theftDetected = false;
 bool tamperDetected = false;
 
-// ======== Timing ========
 unsigned long previousMillis = 0;
-const unsigned long interval = 1000; // 1 second
+const unsigned long interval = 1000; 
 
-// ======== Simulation (set true to simulate 9W bulb without AC) ========
-bool simulateLoad = false;
+// ======== Simulation & Calibration Flags ========
+bool simulateLoad = false;     // true = simulate 9W bulb
+bool calibrationMode = false;  // true = run calibration helper once
 
 void setup() {
   Serial.begin(115200);
 
-  // ADC settings
-  analogReadResolution(12);        // 12-bit ADC
-  analogSetAttenuation(ADC_11db);  // 0-3.6V input range
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
 
   pinMode(HALL_PIN, INPUT_PULLUP);
   pinMode(RELAY_PIN, OUTPUT);
@@ -60,6 +48,11 @@ void setup() {
   lcd.print("Smart Energy Meter");
 
   delay(1000);
+
+  if (calibrationMode) {
+    runCalibration();
+    calibrationMode = false; // Only run once
+  }
 }
 
 void loop() {
@@ -68,53 +61,70 @@ void loop() {
     previousMillis = currentMillis;
 
     if (simulateLoad) {
-      // ===== Simulation of 9W bulb =====
       voltageRMS = 230.0;
-      currentRMS = 0.039; // 9W/230V
+      currentRMS = 0.039; // 9W / 230V
     } else {
-      // ===== Read raw sensors =====
       int rawVoltage = analogRead(VOLTAGE_PIN);
       int rawCurrent = analogRead(CURRENT_PIN);
 
-      // ===== Voltage conversion =====
-      float sensorVoltage = (rawVoltage / ADC_RESOLUTION) * ADC_VOLTAGE; 
-      voltageRMS = (sensorVoltage / ADC_VOLTAGE) * VOLTAGE_SENSOR_MAX; // adjust multiplier after calibration
+      // Voltage conversion
+      float sensorVoltage = (rawVoltage / ADC_RESOLUTION) * ADC_VOLTAGE;
+      voltageRMS = sensorVoltage * VOLTAGE_MULTIPLIER;
 
-      // ===== Current conversion (ACS712 20A) =====
+      // Current conversion (ACS712 20A)
       float currentVoltage = (rawCurrent / ADC_RESOLUTION) * ADC_VOLTAGE;
       currentRMS = (currentVoltage - ACS_ZERO_VOLT) / ACS_SENSITIVITY;
     }
 
-    // ===== Power & Energy =====
+    // Power & Energy
     power = voltageRMS * currentRMS;
-    energy += power / 3600.0; // Wh per second
+    energy += power / 3600.0;
 
-    // ===== Tamper / Theft detection =====
+    // Tamper/Theft
     tamperDetected = digitalRead(HALL_PIN) == LOW;
     theftDetected = tamperDetected;
+    digitalWrite(RELAY_PIN, theftDetected ? HIGH : LOW);
 
-    if (theftDetected) {
-      digitalWrite(RELAY_PIN, HIGH); // Cut power
-    } else {
-      digitalWrite(RELAY_PIN, LOW);
-    }
+    // Serial output
+    Serial.print("V:"); Serial.print(voltageRMS);
+    Serial.print(" | I:"); Serial.print(currentRMS);
+    Serial.print(" | P:"); Serial.print(power);
+    Serial.print(" | E:"); Serial.print(energy,3);
+    Serial.print(" | Theft:"); Serial.println(theftDetected ? "YES" : "NO");
 
-    // ===== Serial Output =====
-    Serial.print("Voltage: "); Serial.print(voltageRMS); Serial.print(" V | ");
-    Serial.print("Current: "); Serial.print(currentRMS); Serial.print(" A | ");
-    Serial.print("Power: "); Serial.print(power); Serial.print(" W | ");
-    Serial.print("Energy: "); Serial.print(energy,3); Serial.print(" Wh | ");
-    Serial.print("Theft: "); Serial.println(theftDetected ? "YES" : "NO");
-
-    // ===== Display on 20x4 LCD =====
-    lcd.setCursor(0,0);
-    lcd.print("Voltage: "); lcd.print(voltageRMS,1); lcd.print(" V     ");
-    lcd.setCursor(0,1);
-    lcd.print("Current: "); lcd.print(currentRMS,3); lcd.print(" A     ");
-    lcd.setCursor(0,2);
-    lcd.print("Power: "); lcd.print(power,1); lcd.print(" W     ");
-    lcd.setCursor(0,3);
-    lcd.print("Energy: "); lcd.print(energy,3); lcd.print(" Wh ");
+    // LCD display
+    lcd.setCursor(0,0); lcd.print("Voltage: "); lcd.print(voltageRMS,1); lcd.print(" V     ");
+    lcd.setCursor(0,1); lcd.print("Current: "); lcd.print(currentRMS,3); lcd.print(" A     ");
+    lcd.setCursor(0,2); lcd.print("Power: "); lcd.print(power,1); lcd.print(" W     ");
+    lcd.setCursor(0,3); lcd.print("Energy: "); lcd.print(energy,3); lcd.print(" Wh ");
     lcd.print(theftDetected ? "THEFT!" : "OK    ");
   }
+}
+
+// ======== Calibration Helper ========
+void runCalibration() {
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Calibration Mode");
+  lcd.setCursor(0,1);
+  lcd.print("Reading sensors...");
+
+  delay(3000); // wait for stable readings
+
+  int rawVoltage = analogRead(VOLTAGE_PIN);
+  int rawCurrent = analogRead(CURRENT_PIN);
+
+  // Voltage multiplier
+  VOLTAGE_MULTIPLIER = 230.0 / ((rawVoltage / ADC_RESOLUTION) * ADC_VOLTAGE);
+  ACS_ZERO_VOLT = (rawCurrent / ADC_RESOLUTION) * ADC_VOLTAGE;
+
+  Serial.println("=== Calibration Complete ===");
+  Serial.print("Voltage Multiplier: "); Serial.println(VOLTAGE_MULTIPLIER,6);
+  Serial.print("ACS_ZERO_VOLT: "); Serial.println(ACS_ZERO_VOLT,3);
+
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Calibration Done!");
+  delay(2000);
+  lcd.clear();
 }
