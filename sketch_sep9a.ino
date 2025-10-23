@@ -1,272 +1,296 @@
-/* Smart Energy Meter (ESP32 + Blynk + LCD + Gov Logging + WiFiManager + Webhook)
-   - Proper voltage divider calculation (set your resistor values R_UP, R_DOWN)
-   - Current displayed/sent in mA
-   - WiFiManager captive-AP for one-time WiFi provisioning (no repeated manual credentials)
-   - Webhook POST when theft detected (to your website/backend)
-   - Calibration multipliers for voltage/current
-*/
+#define BLYNK_TEMPLATE_ID "TMPL36n7PL96f"  // Define Blynk template ID
+#define BLYNK_TEMPLATE_NAME "Hardware test"  // Define Blynk template name
+#define BLYNK_PRINT Serial  // Enable Serial printing for Blynk debug information
 
-#define BLYNK_TEMPLATE_ID "TMPL36n7PL96f"
-#define BLYNK_TEMPLATE_NAME "Hardware test"
-#define BLYNK_AUTH_TOKEN "3vCchEayeoses3vxTbX9meJvjNDeY6Z4"
+#include "EmonLib.h"  // Include EmonLib for energy monitoring
+#include <EEPROM.h>  // Include EEPROM library for storing data
+#include <WiFi.h>  // Include WiFi library for network connectivity
+#include <BlynkSimpleEsp32.h>  // Include Blynk library for ESP32
+#include <Wire.h>  // Include Wire library for I2C communication
+#include <LiquidCrystal_I2C.h>  // Include LiquidCrystal_I2C library for LCD display
+#include <HTTPClient.h>  // Include HTTPClient library for HTTP requests
+#include <ArduinoJson.h>  // Include ArduinoJson library for JSON handling
 
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <BlynkSimpleEsp32.h>
-#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
+LiquidCrystal_I2C lcd(0x27, 20, 4);  // Initialize LCD with I2C address 0x27 and size 16x2
 
-// -------------------- CONFIG --------------------
-char auth[] = BLYNK_AUTH_TOKEN;
+// Website configuration
+const char* websiteURL = "https://smart-energy-meter-portal.onrender.com/api/energy-data";
+const char* deviceId = "ESP32_Energy_Meter_001"; // Unique device identifier
 
-BlynkTimer timer;
+// Constants for calibration
+const float vCalibration = 42.5;  // Voltage calibration factor
+const float currCalibration = 1.80;  // Current calibration factor
+float voltageFactor = 4.27;
+float currentFactor = 0.4;
+// Blynk and WiFi credentials
+const char auth[] = "3vCchEayeoses3vxTbX9meJvjNDeY6Z4";  // Blynk authentication token
+const char ssid[] = "Bhavya";  // WiFi SSID
+const char pass[] = "20062011";  // WiFi password
 
-const int CURRENT_SENSOR_PIN = 34;   // ADC pin for current sensor
-const int VOLTAGE_SENSOR_PIN = 35;   // ADC pin for voltage divider
-const int HALL_TAMPER_PIN    = 32;
-const int RELAY_PIN          = 25;
+// EnergyMonitor instance
+EnergyMonitor emon;  // Create an instance of EnergyMonitor
 
-LiquidCrystal_I2C lcd(0x27, 20, 4);
+// Timer for regular updates
+BlynkTimer timer;  // Create a Blynk timer instance
 
-// ADC / sampling
-const unsigned int SAMPLES = 200;
-const unsigned int SAMPLE_INTERVAL_US = 200;
-const float VREF = 3.3f;
-const int ADC_MAX = 4095;
-const float ADC_TO_V = VREF / (float)ADC_MAX;
+// Variables for energy calculation
+float kWh = 0.0;  // Variable to store energy consumed in kWh
+float cost = 0.0;  // Variable to store cost of energy consumed
+const float ratePerkWh = 6.5;  // Cost rate per kWh
+unsigned long lastMillis = millis();  // Variable to store last time in milliseconds
 
-// --- Voltage divider physical resistors (SET THESE to match your hardware) ---
-// R_up = resistor from mains stepped-down node to ADC input (the resistor to VIN side)
-// R_down = resistor from ADC node to ground
-// Voltage divider ratio = (R_up + R_down) / R_down
-// Example placeholders: R_up = 300000 (300k), R_down = 6800 (6.8k)
-const float R_up = 300000.0f;  // <-- set to the resistor you used
-const float R_down = 6800.0f;  // <-- set to the resistor you used
+// EEPROM addresses for each variable
+const int addrKWh = 12;  // EEPROM address for kWh
+const int addrCost = 16;  // EEPROM address for cost
 
-const float VOLTAGE_DIVIDER_RATIO = (R_up + R_down) / R_down;
+// Display page variable
+int displayPage = 0;  // Variable to track current LCD display page
 
-// --- Current sensor specifics (SET ACCORDING TO SENSOR) ---
-// If using ACS712-30A: sensitivity ~ 0.066 V / A (for 30A module). For ACS712-20A it's 0.100 V/A.
-// Set CURRENT_SENSITIVITY_V_PER_A accordingly.
-const float CURRENT_SENSITIVITY_V_PER_A = 0.100f; // adjust for your module
+// Reset button pin
+const int resetButtonPin = 4;  // Pin for reset button (change to your button pin)
 
-// Use calibration multipliers to fine tune readings after testing
-float voltageCalibration = 1.0f; // multiply Vrms by this
-float currentCalibration = 1.0f; // multiply Irms by this
-
-// energy
-double energy_Wh = 0.0;
-unsigned long lastEnergyMillis = 0;
-
-// flags
-bool tamperDetected = false;
+// Theft detection variables
 bool theftDetected = false;
+bool tamperDetected = false;
+#define HALL_SENSOR_PIN 32  // Hall effect sensor for tamper detection
 
-// Government / gov Blynk token (same idea)
-const char* GOV_AUTH = "ukiSbVaUr-3h2-Sorur2JGiXxQ6LBMct";
-const unsigned long GOV_INTERVAL_MS = 60000;
-unsigned long lastGovMillis = 0;
+// Function prototypes
+void sendEnergyDataToBlynk();  // Prototype for sending energy data to Blynk
+void readEnergyDataFromEEPROM();  // Prototype for reading energy data from EEPROM
+void saveEnergyDataToEEPROM();  // Prototype for saving energy data to EEPROM
+void updateLCD();  // Prototype for updating LCD display
+void changeDisplayPage();  // Prototype for changing LCD display page
+void sendDataToWebsite();  // Prototype for sending data to website
+void resetEEPROM();  // Prototype for resetting EEPROM data
+void checkTheft();  // Prototype for theft detection
 
-// Webhook (your website) to notify when theft/tamper occurs
-const char* WEBHOOK_URL = "https://yourserver.example.com/esp_alert"; // <-- set this to your server endpoint
-
-// -------------------- BLYNK CONTROLS --------------------
-BLYNK_WRITE(V4) {    // relay control from app
-  int relayState = param.asInt();
-  digitalWrite(RELAY_PIN, relayState);
-}
-
-BLYNK_WRITE(V5) {    // reset alerts button in dashboard
-  tamperDetected = false;
-  theftDetected = false;
-  digitalWrite(RELAY_PIN, HIGH);
-  lcd.clear();
-  lcd.setCursor(0,0); lcd.print("Alerts Reset");
-  delay(800);
-  lcd.clear();
-}
-
-// -------------------- UTILS --------------------
-void sendWebhook(const char* eventType, float Vrms, float Irms_mA, float powerW) {
-  if (WiFi.status() != WL_CONNECTED) return;
-
-  HTTPClient http;
-  http.begin(WEBHOOK_URL);
-  http.addHeader("Content-Type", "application/json");
-
-  String payload = "{";
-  payload += "\"event\":\""; payload += eventType; payload += "\"";
-  payload += ",\"Vrms\":"; payload += String(Vrms,2);
-  payload += ",\"Irms_mA\":"; payload += String(Irms_mA,2);
-  payload += ",\"P_W\":"; payload += String(powerW,2);
-  payload += ",\"ts\":"; payload += String(millis()/1000);
-  payload += "}";
-
-  int code = http.POST(payload);
-  if (code > 0) {
-    Serial.println("Webhook POST code: " + String(code));
-  } else {
-    Serial.println("Webhook POST failed");
-  }
-  http.end();
-}
-
-void readTamper() {
-  tamperDetected = (digitalRead(HALL_TAMPER_PIN) == LOW);
-}
-
-float readMeasurements(float &Vrms_out, float &Irms_out) {
-  double sumV2 = 0, sumI2 = 0, sumVI = 0;
-
-  for (unsigned int i = 0; i < SAMPLES; i++) {
-    int rawV = analogRead(VOLTAGE_SENSOR_PIN);
-    int rawI = analogRead(CURRENT_SENSOR_PIN);
-
-    float vADC = rawV * ADC_TO_V; // measured ADC voltage
-    float iADC = rawI * ADC_TO_V;
-
-    // Convert ADC voltage to instantaneous mains volt and amps
-    // We assume the sensors are AC-coupled and biased at VREF/2.
-    float vInst = (vADC - (VREF / 2.0f)) * VOLTAGE_DIVIDER_RATIO * voltageCalibration;
-    float iInst = (iADC - (VREF / 2.0f)) / CURRENT_SENSITIVITY_V_PER_A * currentCalibration;
-
-    sumV2 += vInst * vInst;
-    sumI2 += iInst * iInst;
-    sumVI += vInst * iInst;
-
-    delayMicroseconds(SAMPLE_INTERVAL_US);
-  }
-
-  float Vrms = sqrt(sumV2 / SAMPLES);
-  float Irms = sqrt(sumI2 / SAMPLES);
-  float realPower = sumVI / SAMPLES;
-
-  if (Vrms < 0.5f) Vrms = 0.0f;
-  if (Irms < 0.0005f) Irms = 0.0f;
-  if (realPower < 0.05f) realPower = 0.0f;
-
-  Vrms_out = Vrms;
-  Irms_out = Irms;
-  return realPower;
-}
-
-void accumulateEnergy(float powerW) {
-  unsigned long now = millis();
-  if (lastEnergyMillis == 0) lastEnergyMillis = now;
-  double dt_h = (now - lastEnergyMillis) / 3600000.0;
-  energy_Wh += powerW * dt_h;
-  lastEnergyMillis = now;
-}
-
-void updateLCD(float Vrms, float Irms_mA, float P, double Ewh) {
-  // update without full clear to reduce flicker
-  lcd.setCursor(0,0);
-  char line1[21];
-  snprintf(line1, sizeof(line1), "V:%6.1fV  I:%7.1fmA", Vrms, Irms_mA);
-  lcd.print(line1);
-
-  lcd.setCursor(0,1);
-  char line2[21];
-  snprintf(line2, sizeof(line2), "P:%6.1fW  E:%6.1fWh", P, Ewh);
-  lcd.print("                "); // overwrite
-  lcd.setCursor(0,1);
-  lcd.print(line2);
-}
-
-// -------------------- GOVERNMENT LOGGING --------------------
-void sendToGovernment(float Vrms, float Irms, float powerW, double energyWh) {
-  if (WiFi.status() != WL_CONNECTED) return;
-  HTTPClient http;
-  String url = "https://blynk.cloud/external/api/update?token=" + String(GOV_AUTH) +
-               "&V1=" + String(Vrms,2) + "&V2=" + String(Irms,3) +
-               "&V3=" + String(powerW,2) + "&V4=" + String(energyWh,2) +
-               "&V5=" + String(millis()/1000);
-  http.begin(url);
-  int httpCode = http.GET();
-  Serial.println("Gov send code: " + String(httpCode));
-  http.end();
-}
-
-// -------------------- MAIN TASK --------------------
-void measureAndUpdate() {
-  readTamper();
-  if (tamperDetected) {
-    digitalWrite(RELAY_PIN, LOW);
-    lcd.clear();
-    lcd.setCursor(0,0);
-    lcd.print("! TAMPER ALERT !");
-    lcd.setCursor(0,1);
-    lcd.print("Load DISCONNECTED");
-    Serial.println("⚠ TAMPER detected - relay tripped.");
-    Blynk.logEvent("tamper_alert", "⚠ TAMPER ALERT! Load disconnected!");
-    sendWebhook("tamper", 0, 0, 0);
-    return;
-  }
-
-  float Vrms, Irms_A;
-  float power_W = readMeasurements(Vrms, Irms_A);
-
-  // convert Irms to mA for display & web/Blynk
-  float Irms_mA = Irms_A * 1000.0f;
-
-  // Theft detection: low current while mains present
-  if (Vrms > 180.0f && Irms_A < 0.05f) {
-    theftDetected = true;
-    digitalWrite(RELAY_PIN, LOW);
-    lcd.clear();
-    lcd.setCursor(0,0); lcd.print("! POWER THEFT !");
-    lcd.setCursor(0,1); lcd.print("Bypass Suspected");
-    Serial.println("⚠ Power theft detected (bypass).");
-    Blynk.logEvent("power_theft", "⚠ POWER THEFT detected! Bypass suspected!");
-    // send webhook to your website backend
-    sendWebhook("power_theft", Vrms, Irms_mA, power_W);
-    return;
-  }
-
-  accumulateEnergy(power_W);
-  updateLCD(Vrms, Irms_mA, power_W, energy_Wh);
-
-  // send to Blynk app (V0-V3). Note: send current in mA to match your requirement.
-  Blynk.virtualWrite(V0, Vrms);
-  Blynk.virtualWrite(V1, Irms_mA);
-  Blynk.virtualWrite(V2, power_W);
-  Blynk.virtualWrite(V3, energy_Wh);
-
-  if (millis() - lastGovMillis > GOV_INTERVAL_MS) {
-    sendToGovernment(Vrms, Irms_A, power_W, energy_Wh);
-    lastGovMillis = millis();
-  }
-
-  Serial.printf("Vrms=%.2f V, Irms=%.3f A (%.1fmA), P=%.2f W, E=%.3f Wh\n",
-                Vrms, Irms_A, Irms_mA, power_W, energy_Wh);
-}
-
-// -------------------- SETUP --------------------
 void setup() {
   Serial.begin(115200);
-  Wire.begin();
-  lcd.init();
-  lcd.backlight();
+  
+  // Initialize pins
+  pinMode(resetButtonPin, INPUT_PULLUP);  // Set reset button pin as input with pull-up resistor
+  pinMode(HALL_SENSOR_PIN, INPUT_PULLUP);  // Hall sensor for tamper detection
+  
+  // Initialize the LCD
+  lcd.init();  // Initialize the LCD
+  lcd.backlight();  // Turn on LCD backlight
+  
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Energy");
+  lcd.setCursor(0, 1);
+  lcd.print("Metering System");
+  delay(2000);
+  lcd.clear();
 
-  pinMode(HALL_TAMPER_PIN, INPUT_PULLUP);
-  pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, HIGH); // default: relay ON
+  // Connect to WiFi
+  lcd.setCursor(0, 0);
+  lcd.print("Connecting WiFi");
+  WiFi.begin(ssid, pass);  // Start WiFi connection
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+    delay(500);  // Wait for WiFi connection
+    lcd.print(".");
+    attempts++;
+  }
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Connected");
+    lcd.setCursor(0, 1);
+    lcd.print(WiFi.localIP());
+    Blynk.begin(auth, ssid, pass);  // Start Blynk connection
+  } else {
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("WiFi Failed");
+  }
+  delay(3000);
+  lcd.clear();
 
-  // WiFiManager: start captive portal if no saved credentials
-  WiFiManager wifiManager;
-  wifiManager.autoConnect("SmartMeter-Setup"); // AP shown if no creds saved
+  // Initialize EEPROM
+  EEPROM.begin(32);  // Initialize EEPROM with 32 bytes of storage
 
-  // Start Blynk after WiFi is connected
-  Blynk.begin(auth, WiFi.SSID().c_str(), WiFi.psk().c_str());
+  // Read stored data from EEPROM
+  readEnergyDataFromEEPROM();  // Read energy data from EEPROM
 
-  lastEnergyMillis = millis();
+  // Setup voltage and current inputs
+  emon.voltage(35, vCalibration, 1.7);  // Configure voltage measurement: input pin, calibration, phase shift
+  emon.current(34, currCalibration);  // Configure current measurement: input pin, calibration
 
-  timer.setInterval(1000L, measureAndUpdate); // run every 1s
+  // Setup timers
+  timer.setInterval(2000L, sendEnergyDataToBlynk);  // Set timer to send energy data to Blynk every 2 seconds
+  timer.setInterval(2000L, changeDisplayPage);  // Set timer to change display page every 2 seconds
+  timer.setInterval(5000L, sendDataToWebsite);  // Set timer to send data to website every 5 seconds
 }
 
-// -------------------- LOOP --------------------
 void loop() {
-  Blynk.run();
-  timer.run();
+  Blynk.run();  // Run Blynk
+  timer.run();  // Run timers
+
+  // Check theft detection
+  checkTheft();
+
+  // Check if the reset button is pressed
+  if (digitalRead(resetButtonPin) == LOW) {  // If reset button is pressed (assuming button press connects to ground)
+    delay(200);  // Debounce delay
+    resetEEPROM();  // Reset EEPROM data
+  }
+}
+
+void checkTheft() {
+  tamperDetected = digitalRead(HALL_SENSOR_PIN) == LOW;
+  
+  theftDetected = false;
+  
+  if (tamperDetected) {
+    theftDetected = true;
+    Serial.println("⚠ TAMPER detected (Hall sensor).");
+  } else if (emon.Vrms > 180 && emon.Irms < 0.05) {
+    theftDetected = true;
+    Serial.println("⚠ POWER THEFT detected (bypass condition).");
+  }
+}
+
+void sendEnergyDataToBlynk() {
+  emon.calcVI(20, 2000);  // Calculate voltage and current: number of half wavelengths (crossings), time-out
+  float Vrms = emon.Vrms * voltageFactor;  // Get root mean square voltage
+  float Irms = emon.Irms * currentFactor;  // Get root mean square current
+  float apparentPower = Vrms * Irms;  // Get apparent power
+
+  // Calculate energy consumed in kWh
+  unsigned long currentMillis = millis();  // Get current time in milliseconds
+  kWh += apparentPower * (currentMillis - lastMillis) / 3600000000.0;  // Update kWh
+  lastMillis = currentMillis;  // Update last time
+
+  // Calculate the cost based on the rate per kWh
+  cost = kWh * ratePerkWh;  // Calculate cost
+
+  // Save the latest values to EEPROM
+  saveEnergyDataToEEPROM();  // Save energy data to EEPROM
+
+  // Convert kWh to Wh for Blynk V3
+  float energyWh = kWh * 1000.0;
+
+  // Send data to Blynk - ONLY V0 to V3
+  Blynk.virtualWrite(V0, Vrms);  // Send voltage to Blynk virtual pin V0
+  Blynk.virtualWrite(V1, Irms);  // Send current to Blynk virtual pin V1
+  Blynk.virtualWrite(V2, apparentPower);  // Send apparent power to Blynk virtual pin V2
+  Blynk.virtualWrite(V3, energyWh);  // Send energy in Wh to Blynk virtual pin V3
+
+  // Debug print
+  Serial.print("Blynk - V0:");
+  Serial.print(Vrms);
+  Serial.print(" V1:");
+  Serial.print(Irms);
+  Serial.print(" V2:");
+  Serial.print(apparentPower);
+  Serial.print(" V3:");
+  Serial.print(energyWh);
+  Serial.println("Wh");
+
+  // Update the LCD with the new values
+  updateLCD();  // Update LCD display
+}
+
+void sendDataToWebsite() {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    
+    // Create JSON data
+    DynamicJsonDocument doc(1024);
+    doc["deviceId"] = deviceId;
+    doc["voltage"] = emon.Vrms;
+    doc["current"] = emon.Irms;
+    doc["power"] = emon.apparentPower;
+    doc["energy"] = kWh;
+    doc["cost"] = cost;
+    doc["theftDetected"] = theftDetected;
+    doc["tamperDetected"] = tamperDetected;
+    doc["timestamp"] = millis();
+
+    String jsonString;
+    serializeJson(doc, jsonString);
+
+    // Debug print
+    Serial.println("Sending to website:");
+    Serial.println(jsonString);
+    Serial.print("URL: ");
+    Serial.println(websiteURL);
+
+    // Send POST request
+    http.begin(websiteURL);
+    http.addHeader("Content-Type", "application/json");
+    
+    int httpResponseCode = http.POST(jsonString);
+    
+    if (httpResponseCode > 0) {
+      Serial.print("Data sent successfully. Response: ");
+      Serial.println(httpResponseCode);
+      String response = http.getString();
+      Serial.print("Server response: ");
+      Serial.println(response);
+    } else {
+      Serial.print("Error: ");
+      Serial.println(httpResponseCode);
+    }
+    
+    http.end();
+  }
+}
+
+void readEnergyDataFromEEPROM() {
+  EEPROM.get(addrKWh, kWh);  // Read kWh from EEPROM
+  EEPROM.get(addrCost, cost);  // Read cost from EEPROM
+
+  // Initialize to zero if values are invalid
+  if (isnan(kWh)) {
+    kWh = 0.0;  // Set kWh to 0 if invalid
+    saveEnergyDataToEEPROM();  // Save to EEPROM
+  }
+  if (isnan(cost)) {
+    cost = 0.0;  // Set cost to 0 if invalid
+    saveEnergyDataToEEPROM();  // Save to EEPROM
+  }
+}
+
+void saveEnergyDataToEEPROM() {
+  EEPROM.put(addrKWh, kWh);  // Save kWh to EEPROM
+  EEPROM.put(addrCost, cost);  // Save cost to EEPROM
+  EEPROM.commit();  // Commit EEPROM changes
+}
+
+void updateLCD() {
+  lcd.clear();  // Clear LCD display
+    lcd.setCursor(0, 0);  // Set cursor to first row
+    lcd.printf("V:%.1fV I:%.2fA", emon.Vrms*voltageFactor, emon.Irms*currentFactor);  // Print voltage and current
+    lcd.setCursor(0, 1);  // Set cursor to second row
+    lcd.printf("P:%.1fW E:%.1fWh", emon.apparentPower*voltageFactor*currentFactor, kWh*1000);  // Print power and energy
+  
+    lcd.setCursor(0, 2);  // Set cursor to first row
+    lcd.printf("Energy: %.3fkWh", kWh);  // Print energy
+    lcd.setCursor(0, 3);  // Set cursor to second row
+    if (theftDetected) {
+      lcd.print("THEFT DETECTED!");
+    } else {
+      lcd.printf("Cost: Rs.%.2f", cost);  // Print cost
+    
+  }
+}
+
+void changeDisplayPage() {
+  displayPage = (displayPage + 1) % 2;  // Change display page
+  updateLCD();  // Update LCD display
+}
+
+void resetEEPROM() {
+  kWh = 0.0;  // Reset kWh to 0
+  cost = 0.0;  // Reset cost to 0
+  saveEnergyDataToEEPROM();  // Save to EEPROM
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Data Reset");
+  lcd.setCursor(0, 1);
+  lcd.print("Successfully");
+  delay(2000);
 }
